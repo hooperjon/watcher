@@ -1,0 +1,71 @@
+name: watch
+
+on:
+  schedule:
+    # A run is queued every 20 minutes and waits for the current one to end.
+    # Outside ACTIVE_HOURS a run exits within seconds without logging in.
+    - cron: "7,27,47 * * * *"
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "Only send a test notification"
+        type: boolean
+        default: false
+
+concurrency:
+  group: watch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install --quiet requests
+
+      - name: Restore list of visits already seen
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+
+      - name: Watch for visits
+        run: python watcher.py
+        env:
+          MD_EMAIL: ${{ secrets.MD_EMAIL }}
+          MD_PASSWORD: ${{ secrets.MD_PASSWORD }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          HOME_LAT: ${{ secrets.HOME_LAT }}
+          HOME_LON: ${{ secrets.HOME_LON }}
+          RADIUS_MILES: "20"
+          POLL_SECONDS: "120"
+          ACTIVE_HOURS: "07:30-22:30"
+          TIMEZONE: "Europe/London"
+          RUN_MINUTES: "335"
+          REALERT_HOURS: "3"
+          SEND_TEST: ${{ inputs.test }}
+
+      - name: Save list of visits already seen
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: state-${{ github.run_id }}
+
+      - name: Keep the schedule from being paused for inactivity
+        if: always()
+        run: gh workflow enable watch.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
