@@ -46,6 +46,13 @@ class LoginError(Exception):
     pass
 
 
+class FetchError(Exception):
+    def __init__(self, status, detail):
+        super().__init__(f"HTTP {status}")
+        self.status = status
+        self.detail = detail
+
+
 # --- Authentication ----------------------------------------------------------
 class Auth:
     """Signs in through the portal's normal login page and keeps a token fresh."""
@@ -173,7 +180,7 @@ def fetch_visits(auth, lat, lon):
         "CurrentPosition.Latitude": lat,
         "CurrentPosition.Longitude": lon,
         "pageStart": 0,
-        "pageSize": 200,
+        "pageSize": 50,
         "DateFilterType": 0,
         "FilterType": 0,
         "SortType": 0,
@@ -185,12 +192,15 @@ def fetch_visits(auth, lat, lon):
             headers={
                 "Authorization": f"Bearer {auth.token(force=(attempt == 2))}",
                 "User-Agent": USER_AGENT,
+                "Accept": "application/json",
             },
             timeout=30,
         )
         if r.status_code == 401 and attempt == 1:
             continue
-        r.raise_for_status()
+        if r.status_code >= 400:
+            detail = re.sub(r"\s+", " ", r.text or "")[:200]
+            raise FetchError(r.status_code, detail)
         data = r.json()
         if not isinstance(data, list):
             raise ValueError("visit list was not in the expected format")
@@ -345,14 +355,16 @@ def main():
             failures = 0
         except Exception as e:
             failures += 1
-            print(f"check failed ({type(e).__name__}), {failures} in a row")
+            what = f"HTTP {e.status}" if isinstance(e, FetchError) else type(e).__name__
+            detail = e.detail if isinstance(e, FetchError) else ""
+            print(f"check failed ({what}), {failures} in a row")
             if failures == 5 and not warned:
                 warned = True
                 try:
                     notify(
                         topic,
                         "Mystery Dining watcher is having trouble",
-                        f"5 checks in a row failed ({type(e).__name__}). It will keep trying.",
+                        f"5 checks in a row failed ({what}). It will keep trying.\n{detail}".strip(),
                         3,
                         ("warning",),
                     )
